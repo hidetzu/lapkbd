@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,21 +258,31 @@ func lineLogger(lines chan string) *log.Logger {
 	}), "", 0)
 }
 
+// reconcileLogger は状態を合わせた結果の行だけを渡す。
+func reconcileLogger(lines chan string) *log.Logger {
+	return log.New(writerFunc(func(p []byte) (int, error) {
+		if strings.HasPrefix(string(p), "external=") {
+			lines <- string(p)
+		}
+		return len(p), nil
+	}), "", 0)
+}
+
 func TestWatchCollapsesBurstIntoOneReconcile(t *testing.T) {
 	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(true), trackpad(true)}}
 	lines := make(chan string, 16)
 
 	const quiet = 100 * time.Millisecond
-	events := make(chan struct{})
+	events := make(chan kwin.Event)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- Watch(ctx, b, testConfig, events, quiet, lineLogger(lines)) }()
+	go func() { done <- Watch(ctx, b, testConfig, events, quiet, reconcileLogger(lines)) }()
 
 	<-lines // 起動時の 1 回
 
 	for range 5 {
-		events <- struct{}{}
+		events <- kwin.Event{Kind: kwin.DeviceAdded, SysName: "event13"}
 		time.Sleep(quiet / 5)
 	}
 
@@ -292,12 +303,98 @@ func TestWatchCollapsesBurstIntoOneReconcile(t *testing.T) {
 	}
 }
 
+func TestWatchLogsEveryEventAsItArrives(t *testing.T) {
+	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(true), trackpad(true)}}
+	lines := make(chan string, 16)
+	events := make(chan kwin.Event)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Watch(ctx, b, testConfig, events, time.Hour, lineLogger(lines)) }()
+
+	<-lines // 起動時の 1 回
+
+	for _, sysName := range []string{"event13", "event15"} {
+		events <- kwin.Event{Kind: kwin.DeviceRemoved, SysName: sysName}
+		select {
+		case line := <-lines:
+			if !strings.HasPrefix(line, "event=removed device="+sysName+" ") {
+				t.Errorf("line = %q", line)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no log line for %s", sysName)
+		}
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEventLine(t *testing.T) {
+	hhkb := externalKeyboard(bluetoothKbd)
+	const hhkbName = `name="HHKB-Hybrid_1 Keyboard"`
+	tests := map[string]struct {
+		devices []kwin.Device
+		known   []kwin.Device
+		event   kwin.Event
+		want    string
+	}{
+		"external on": {
+			devices: []kwin.Device{hhkb},
+			event:   kwin.Event{Kind: kwin.DeviceAdded, SysName: "event16"},
+			want:    "event=added device=event16 role=external enabled=true " + hhkbName,
+		},
+		"external off is named from memory": {
+			known: []kwin.Device{hhkb},
+			event: kwin.Event{Kind: kwin.DeviceRemoved, SysName: "event16"},
+			want:  "event=removed device=event16 role=external " + hhkbName,
+		},
+		"internal comes back off": {
+			devices: []kwin.Device{internalKeyboard(false)},
+			event:   kwin.Event{Kind: kwin.DeviceAdded, SysName: "event13"},
+			want:    `event=added device=event13 role=internal enabled=false name="` + internalName + `"`,
+		},
+		"touchpad": {
+			devices: []kwin.Device{trackpad(true)},
+			event:   kwin.Event{Kind: kwin.DeviceAdded, SysName: "event15"},
+			want:    `event=added device=event15 role=touchpad enabled=true name="` + internalName + `"`,
+		},
+		"added without a D-Bus object hides the old device": {
+			known: []kwin.Device{internalKeyboard(true)},
+			event: kwin.Event{Kind: kwin.DeviceAdded, SysName: "event13"},
+			want:  "event=added device=event13 unreadable",
+		},
+		"removed before it was ever read": {
+			event: kwin.Event{Kind: kwin.DeviceRemoved, SysName: "event99"},
+			want:  "event=removed device=event99 unreadable",
+		},
+		"KWin started": {
+			event: kwin.Event{Kind: kwin.KWinStarted},
+			want:  "event=kwin-started",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			known := map[string]kwin.Device{}
+			for _, d := range tt.known {
+				known[d.SysName] = d
+			}
+			b := &fakeBackend{devices: tt.devices}
+			if got := eventLine(b, testConfig, known, tt.event); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWatchRestoresOnStop(t *testing.T) {
 	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(true), trackpad(true), externalKeyboard(bluetoothKbd)}}
 	lines := make(chan string, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- Watch(ctx, b, testConfig, make(chan struct{}), time.Hour, lineLogger(lines)) }()
+	go func() { done <- Watch(ctx, b, testConfig, make(chan kwin.Event), time.Hour, lineLogger(lines)) }()
 
 	<-lines
 	if b.enabled(t, "event13") {
@@ -316,14 +413,14 @@ func TestWatchSurvivesKWinBeingAwayAtStart(t *testing.T) {
 	b := &fakeBackend{listErr: errors.New("KWin is not running")}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := Watch(ctx, b, testConfig, make(chan struct{}), time.Hour, discardLogger()); err != nil {
+	if err := Watch(ctx, b, testConfig, make(chan kwin.Event), time.Hour, discardLogger()); err != nil {
 		t.Fatalf("Watch should wait for KWin, got %v", err)
 	}
 }
 
 func TestWatchFailsWhenEventsClose(t *testing.T) {
 	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(true)}}
-	events := make(chan struct{})
+	events := make(chan kwin.Event)
 	close(events)
 	if err := Watch(context.Background(), b, testConfig, events, time.Hour, discardLogger()); err == nil {
 		t.Fatal("want an error so that systemd restarts the service")

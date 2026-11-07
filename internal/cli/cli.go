@@ -208,7 +208,7 @@ func (a app) cmdStatus(args []string) error {
 	for _, d := range keyboards(devices) {
 		role := ""
 		if configErr == nil {
-			role = roleOf(d, c)
+			role = guard.Role(d, c)
 		}
 		fmt.Fprintf(a.stdout, "  %-8s %-3s %-8s %s\n", d.SysName, onOff(d.Enabled), role, d.Name)
 	}
@@ -236,16 +236,6 @@ func printState(w io.Writer, devices []kwin.Device, c config.Config) {
 	} else {
 		fmt.Fprintf(w, "internal  not found: %q\n", c.Internal)
 	}
-}
-
-func roleOf(d kwin.Device, c config.Config) string {
-	switch {
-	case guard.IsInternalKeyboard(d, c):
-		return "internal"
-	case slices.Contains(c.External, d.Name):
-		return "external"
-	}
-	return ""
 }
 
 func onOff(enabled bool) string {

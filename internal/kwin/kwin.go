@@ -133,8 +133,23 @@ func (k *Client) ReloadConfig() error {
 	return nil
 }
 
+// EventKind は Event の種類。
+type EventKind string
+
+const (
+	DeviceAdded   EventKind = "added"
+	DeviceRemoved EventKind = "removed"
+	KWinStarted   EventKind = "kwin-started"
+)
+
+// Event はデバイスの変化か KWin の起動。SysName はデバイスの変化のときだけ入る。
+type Event struct {
+	Kind    EventKind
+	SysName string
+}
+
 // Events はデバイスの変化と KWin の起動を知らせる。セッションバスが切れるとチャネルが閉じる。
-func (k *Client) Events() (<-chan struct{}, error) {
+func (k *Client) Events() (<-chan Event, error) {
 	for _, member := range []string{"deviceAdded", "deviceRemoved"} {
 		err := k.conn.AddMatchSignal(
 			dbus.WithMatchObjectPath(root),
@@ -157,34 +172,46 @@ func (k *Client) Events() (<-chan struct{}, error) {
 	signals := make(chan *dbus.Signal, 64)
 	k.conn.Signal(signals)
 
-	events := make(chan struct{}, 1)
+	events := make(chan Event, 64)
 	go func() {
 		defer close(events)
 		for sig := range signals {
-			if !isRelevantSignal(sig) {
+			event, ok := eventFromSignal(sig)
+			if !ok {
 				continue
 			}
 			select {
-			case events <- struct{}{}:
-			default: // 未処理の通知が 1 つあれば、この変化も含めて合わせられる
+			case events <- event:
+			default: // 未処理の通知があれば、この変化も含めて合わせられる。失うのはログの 1 行だけ
 			}
 		}
 	}()
 	return events, nil
 }
 
-func isRelevantSignal(sig *dbus.Signal) bool {
+func eventFromSignal(sig *dbus.Signal) (Event, bool) {
 	switch sig.Name {
-	case managerIface + ".deviceAdded", managerIface + ".deviceRemoved":
-		return true
+	case managerIface + ".deviceAdded":
+		return deviceEvent(DeviceAdded, sig), true
+	case managerIface + ".deviceRemoved":
+		return deviceEvent(DeviceRemoved, sig), true
 	case "org.freedesktop.DBus.NameOwnerChanged":
 		// 本体は name, old owner, new owner。new owner が空なら KWin は去っていて、戻るまで話せない
 		if len(sig.Body) != 3 {
-			return false
+			return Event{}, false
 		}
 		name, _ := sig.Body[0].(string)
 		owner, _ := sig.Body[2].(string)
-		return name == service && owner != ""
+		return Event{Kind: KWinStarted}, name == service && owner != ""
 	}
-	return false
+	return Event{}, false
+}
+
+// deviceEvent は sysname が読めなくても Event を返す。状態を合わせるのに sysname は要らない。
+func deviceEvent(kind EventKind, sig *dbus.Signal) Event {
+	event := Event{Kind: kind}
+	if len(sig.Body) == 1 {
+		event.SysName, _ = sig.Body[0].(string)
+	}
+	return event
 }

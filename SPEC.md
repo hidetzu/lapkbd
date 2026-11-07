@@ -73,6 +73,21 @@ MacBook では内蔵キーボードとトラックパッドが同じ名前で同
 6. `Enabled` 以外のキーには触らない
 7. KWin から読み直した実際の値をログに出す
 
+### イベントのログ
+
+信号は、まとめて状態を合わせる前に 1 つずつ、受けた順にログに出す。外付けの ON/OFF もここに出る。
+
+```text
+event=added device=event16 role=external enabled=true name="HHKB-Hybrid_1 Keyboard"
+event=removed device=event16 role=external name="HHKB-Hybrid_1 Keyboard"
+event=added device=event13 unreadable
+event=kwin-started
+```
+
+- `role` は `internal` / `touchpad` / `external` / `other`
+- `enabled` は追加のときだけ出す。作られた時点の値で、lapkbd が書く前のもの
+- `unreadable` は KWin から読めなかったデバイス。追加のときは D-Bus のオブジェクトが無いことを指す
+
 ### 安全のための決まり
 
 キーボードが 1 つも使えない状態を避けることを最優先にする。
