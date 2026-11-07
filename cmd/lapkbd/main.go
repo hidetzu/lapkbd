@@ -1,5 +1,5 @@
 // lapkbd は、外付けキーボードを繋いでいる間だけノート PC の内蔵キーボードを無効にする常駐ツール。
-// 振る舞いの正本は SPEC.md。main は cli.Run に任せて、その戻り値で終わるだけ。
+// main は cli.Run に任せて、その戻り値で終わるだけ。
 package main
 
 import (
