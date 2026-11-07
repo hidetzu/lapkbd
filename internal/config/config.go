@@ -14,6 +14,7 @@ import (
 )
 
 // Config は lapkbd が扱うキーボードの名前。KWin が報告する名前と完全一致で比べる。
+// 外付けを自動で判定しないのは、仮想キーボードを外付けと誤認すると内蔵キーボードが止まるから。
 type Config struct {
 	Internal string   `toml:"internal"`
 	External []string `toml:"external"`

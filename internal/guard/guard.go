@@ -1,5 +1,5 @@
 // Package guard は内蔵キーボードをいつ有効にするかを決めて KWin に適用する。
-// 判断の決まりの正本は SPEC.md の「動作の決まり」。
+// キーボードが 1 つも使えない状態を避けることを最優先にする。
 package guard
 
 import (
@@ -30,6 +30,7 @@ type Backend interface {
 }
 
 // IsInternalKeyboard は d が切り替えの対象の内蔵キーボードかを返す。
+// MacBook では内蔵キーボードとトラックパッドが同じ名前で、kcminputrc の設定グループも共有する。
 func IsInternalKeyboard(d kwin.Device, c config.Config) bool {
 	return d.Name == c.Internal && d.AlphaNumeric && !d.Touchpad
 }
@@ -75,6 +76,7 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 		return "", err
 	}
 
+	// 読めなかったデバイスは devices に入らない。外付けなら接続なしとして扱い、内蔵は有効の側に倒す。
 	external := slices.ContainsFunc(devices, func(d kwin.Device) bool { return IsUsableExternal(d, c) })
 	want := !external
 
@@ -157,7 +159,7 @@ func Restore(b Backend, c config.Config) error {
 }
 
 // Watch は最初に 1 回、その後は信号のまとまりごとに 1 回、状態を合わせる。ctx が終わると内蔵キーボードを戻して
-// nil を返し、events が閉じるとエラーを返す。KWin に届かないのはログに残すだけで、KWin が戻れば信号が来る。
+// nil を返し、events が閉じるとエラーを返す (再起動は systemd に任せる)。KWin に届かないのはログに残すだけで、KWin が戻れば信号が来る。
 func Watch(ctx context.Context, b Backend, c config.Config, events <-chan kwin.Event, quiet time.Duration, logger *log.Logger) error {
 	known := map[string]kwin.Device{}
 	rememberDevices(b, known)
