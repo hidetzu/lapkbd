@@ -122,6 +122,17 @@ func (k *Client) SaveEnabled(d Device) error {
 	return nil
 }
 
+// ReloadConfig は KWin に kcminputrc を読み直させる。KWin は設定をメモリに持っていて、
+// kwriteconfig6 の書き込みだけでは、次に作るデバイスに古い値を使う。
+// 値の 3, 0 は KGlobalSettings の SettingsChanged と SETTINGS_MOUSE。
+// KWin はこのときポインタのデバイスにも設定を適用し直す。
+func (k *Client) ReloadConfig() error {
+	if err := k.conn.Emit("/KGlobalSettings", "org.kde.KGlobalSettings.notifyChange", int32(3), int32(0)); err != nil {
+		return fmt.Errorf("notify KWin of the config change: %w", err)
+	}
+	return nil
+}
+
 // Events はデバイスの変化と KWin の起動を知らせる。セッションバスが切れるとチャネルが閉じる。
 func (k *Client) Events() (<-chan struct{}, error) {
 	for _, member := range []string{"deviceAdded", "deviceRemoved"} {

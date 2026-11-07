@@ -25,6 +25,8 @@ type Backend interface {
 	SetEnabled(sysName string, enabled bool) error
 	// SaveEnabled は kcminputrc にそのデバイスの Enabled=true を書く。
 	SaveEnabled(d kwin.Device) error
+	// ReloadConfig は KWin に kcminputrc を読み直させる。
+	ReloadConfig() error
 }
 
 // IsInternalKeyboard は d が切り替えの対象の内蔵キーボードかを返す。
@@ -65,10 +67,12 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 
 	var errs []error
 	var saveTarget *kwin.Device
+	turnedOff := false
 	for i, d := range devices {
 		switch {
 		case IsInternalKeyboard(d, c):
 			errs = append(errs, setIfDifferent(b, d, want))
+			turnedOff = turnedOff || (d.Enabled && !want)
 		case isInternalTouchpad(d, c):
 			errs = append(errs, setIfDifferent(b, d, true))
 		default:
@@ -83,6 +87,11 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 	// 次のセッションが内蔵キーボード無しで (MacBook ならトラックパッドも無しで) 始まる。
 	if saveTarget != nil {
 		errs = append(errs, b.SaveEnabled(*saveTarget))
+	}
+	// KWin はメモリにも false を持つ。そのままだと、スリープ復帰で作り直されたキーボードが無効で始まり、
+	// D-Bus のオブジェクトも失っていると誰も戻せない。読み直させて、有効で始まるようにする。
+	if turnedOff {
+		errs = append(errs, b.ReloadConfig())
 	}
 
 	return summarize(b, c, external, want, missing), errors.Join(errs...)

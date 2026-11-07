@@ -40,6 +40,8 @@ type fakeBackend struct {
 	setErr  error
 	writes  []string // SetEnabled に渡された sysname を順に
 	saves   int
+	// calls は SaveEnabled と ReloadConfig の呼び出しを順に持つ
+	calls []string
 }
 
 func (f *fakeBackend) Devices() ([]kwin.Device, []string, error) {
@@ -64,6 +66,12 @@ func (f *fakeBackend) SetEnabled(sysName string, enabled bool) error {
 
 func (f *fakeBackend) SaveEnabled(kwin.Device) error {
 	f.saves++
+	f.calls = append(f.calls, "save")
+	return nil
+}
+
+func (f *fakeBackend) ReloadConfig() error {
+	f.calls = append(f.calls, "reload")
 	return nil
 }
 
@@ -153,6 +161,38 @@ func TestReconcile(t *testing.T) {
 			}
 			if b.saves != 1 {
 				t.Errorf("saves = %d, want 1", b.saves)
+			}
+		})
+	}
+}
+
+// KWin のメモリに Enabled=false を残すと、作り直されたキーボードが無効で始まり締め出しになる。
+func TestTurningTheKeyboardOffMakesKWinReloadTheSavedTrue(t *testing.T) {
+	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(true), trackpad(true), externalKeyboard(bluetoothKbd)}}
+	if _, err := Reconcile(b, testConfig); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"save", "reload"}; !slices.Equal(b.calls, want) {
+		t.Errorf("calls = %v, want %v: the reload must see the saved value", b.calls, want)
+	}
+}
+
+// 読み直すと KWin はトラックパッドにも設定を適用し直すので、必要なときだけにする。
+func TestReloadIsSkippedUnlessTheKeyboardWasTurnedOff(t *testing.T) {
+	tests := map[string][]kwin.Device{
+		"already off": {internalKeyboard(false), trackpad(true), externalKeyboard(bluetoothKbd)},
+		"turned on":   {internalKeyboard(false), trackpad(true)},
+		"already on":  {internalKeyboard(true), trackpad(true)},
+		"no keyboard": {trackpad(true), externalKeyboard(bluetoothKbd)},
+	}
+	for name, devices := range tests {
+		t.Run(name, func(t *testing.T) {
+			b := &fakeBackend{devices: devices}
+			if _, err := Reconcile(b, testConfig); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(b.calls, "reload") {
+				t.Errorf("calls = %v, want no reload", b.calls)
 			}
 		})
 	}
