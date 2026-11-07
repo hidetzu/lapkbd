@@ -1,5 +1,8 @@
 # lapkbd
 
+[![ci](https://img.shields.io/github/actions/workflow/status/hidetzu/lapkbd/ci.yml?branch=main&style=flat-square)](https://github.com/hidetzu/lapkbd/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/hidetzu/lapkbd.svg?style=flat-square)](LICENSE)
+
 Turns a laptop's internal keyboard off while an external keyboard is connected, so you can rest the external one on top of it. For KDE Plasma's Wayland session. No root needed.
 
 When the external keyboard goes away, or lapkbd stops, the internal keyboard comes back. lapkbd never switches the trackpad.
@@ -51,7 +54,7 @@ KWin saves a keyboard it turned off as `Enabled=false` in `kcminputrc`, and the 
 
 ## If you have no keyboard
 
-Disconnecting the external keyboard brings the internal one back, as does `systemctl --user stop lapkbd.service`. So does `lapkbd restore`, but if the service is running it lasts only until the next device change. These all need the D-Bus object described under Limits.
+Disconnecting the external keyboard brings the internal one back, as does `systemctl --user stop lapkbd.service`. So does `lapkbd restore`, but if the service is running it lasts only until the next device change.
 
 Logging in again also starts with the internal keyboard on, because of the saved setting above. If the service is enabled and the external keyboard is still connected, lapkbd then turns it off again.
 
@@ -59,7 +62,6 @@ Logging in again also starts with the internal keyboard on, because of the saved
 
 - It works through KWin, so other desktops and the SDDM login screen are not covered.
 - External keyboards are named explicitly. A virtual keyboard should not switch your real one off.
-- KWin can lose the D-Bus object of the internal keyboard when waking from sleep. This happened at 3 of 15 wakes in one day's logs, on one T2 MacBook Pro with KWin 6.8.2. While the object is missing, lapkbd cannot switch the internal keyboard. `lapkbd status` shows a warning and the log shows `unreadable-devices=`. The object came back later each time, usually at the next wake. Logging in again should also bring it back. The cause is not confirmed, and typing on the internal keyboard has not been tested in this state.
 
 ## License
 
