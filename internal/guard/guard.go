@@ -57,7 +57,7 @@ func Role(d kwin.Device, c config.Config) string {
 	return "other"
 }
 
-// setIfDifferent は値が違うときだけ書く。トラックパッドの enabled は書くとタッチが切れる。
+// setIfDifferent は値が違うときだけ書く。
 func setIfDifferent(b Backend, d kwin.Device, want bool) error {
 	if d.Enabled == want {
 		return nil
@@ -82,14 +82,13 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 	var saveTarget *kwin.Device
 	turnedOff := false
 	for i, d := range devices {
-		switch {
-		case IsInternalKeyboard(d, c):
+		if d.Name != c.Internal {
+			continue
+		}
+		// トラックパッドの enabled には書かない。保存値だけはキーボードと同じグループなので、下で一緒に直す。
+		if IsInternalKeyboard(d, c) {
 			errs = append(errs, setIfDifferent(b, d, want))
 			turnedOff = turnedOff || (d.Enabled && !want)
-		case isInternalTouchpad(d, c):
-			errs = append(errs, setIfDifferent(b, d, true))
-		default:
-			continue
 		}
 		if saveTarget == nil {
 			saveTarget = &devices[i]
@@ -134,7 +133,7 @@ func summarize(b Backend, c config.Config, external, want bool, missing []string
 	return line
 }
 
-// Restore は内蔵キーボードと同じ名前のデバイスをすべて有効に戻す。
+// Restore は内蔵キーボードを有効に戻す。同じ名前のトラックパッドの enabled には書かない。
 func Restore(b Backend, c config.Config) error {
 	devices, _, err := b.Devices()
 	if err != nil {
@@ -146,7 +145,9 @@ func Restore(b Backend, c config.Config) error {
 		if d.Name != c.Internal {
 			continue
 		}
-		errs = append(errs, setIfDifferent(b, d, true))
+		if IsInternalKeyboard(d, c) {
+			errs = append(errs, setIfDifferent(b, d, true))
+		}
 		if !saved {
 			errs = append(errs, b.SaveEnabled(d))
 			saved = true

@@ -2,7 +2,7 @@
 
 Turns a laptop's internal keyboard off while an external keyboard is connected, so you can rest the external one on top of it. For KDE Plasma's Wayland session. No root needed.
 
-When the external keyboard goes away, or lapkbd stops, the internal keyboard comes back. The trackpad stays on throughout.
+When the external keyboard goes away, or lapkbd stops, the internal keyboard comes back. lapkbd never switches the trackpad.
 
 ## Setup
 

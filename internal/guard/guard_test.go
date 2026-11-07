@@ -119,10 +119,10 @@ func TestReconcile(t *testing.T) {
 			wantWrites:   nil,
 		},
 		{
-			name:         "a trackpad left off by a stale saved value comes back",
+			name:         "a trackpad that is off is left alone",
 			devices:      []kwin.Device{internalKeyboard(false), trackpad(false), externalKeyboard(bluetoothKbd)},
 			wantInternal: false,
-			wantWrites:   []string{"event15"},
+			wantWrites:   nil,
 		},
 		{
 			name:         "an unlisted keyboard does not count",
@@ -153,9 +153,6 @@ func TestReconcile(t *testing.T) {
 			}
 			if got := b.enabled(t, "event13"); got != tt.wantInternal {
 				t.Errorf("internal enabled = %t, want %t", got, tt.wantInternal)
-			}
-			if !b.enabled(t, "event15") {
-				t.Error("trackpad must stay enabled")
 			}
 			if !slices.Equal(b.writes, tt.wantWrites) {
 				t.Errorf("writes = %v, want %v", b.writes, tt.wantWrites)
@@ -230,6 +227,19 @@ func TestReconcileReturnsWriteErrorWithSummary(t *testing.T) {
 	want := "external=true want-internal=false internal=event13:true"
 	if got != want {
 		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestRestoreLeavesTheTrackpadAlone(t *testing.T) {
+	b := &fakeBackend{devices: []kwin.Device{internalKeyboard(false), trackpad(false)}}
+	if err := Restore(b, testConfig); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"event13"}; !slices.Equal(b.writes, want) {
+		t.Errorf("writes = %v, want %v", b.writes, want)
+	}
+	if b.saves != 1 {
+		t.Errorf("saves = %d, want 1", b.saves)
 	}
 }
 
