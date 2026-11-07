@@ -4,6 +4,12 @@ Turns a laptop's internal keyboard off while an external keyboard is connected, 
 
 When the external keyboard goes away, or lapkbd stops, the internal keyboard comes back. lapkbd never switches the trackpad.
 
+## Requirements
+
+- KDE Plasma 6 on Wayland, with `kwriteconfig6`
+- systemd, for the user service
+- Go 1.27 or later, to install
+
 ## Setup
 
 ```sh
@@ -37,5 +43,10 @@ Stopping the service brings the internal keyboard back, as does `lapkbd restore`
 
 - It works through KWin, so other desktops and the SDDM login screen are not covered.
 - External keyboards are named explicitly. A virtual keyboard should not switch your real one off.
+- KWin can lose the D-Bus object of the internal keyboard when waking from sleep. This happened at 3 of 15 wakes in one day's logs, on one T2 MacBook Pro with KWin 6.8.2. While the object is missing, lapkbd cannot switch the internal keyboard, and `lapkbd status` and the log show a warning. The object came back later each time, usually at the next wake. Logging in again should also bring it back. The cause is not confirmed, and typing on the internal keyboard has not been tested in this state.
 
-The full behaviour is in [SPEC.md](SPEC.md).
+The full behaviour is in [SPEC.md](SPEC.md) (in Japanese).
+
+## License
+
+[MIT](LICENSE)
