@@ -25,6 +25,8 @@ type Backend interface {
 	SetEnabled(sysName string, enabled bool) error
 	// SaveEnabled は kcminputrc にそのデバイスの Enabled=true を書く。
 	SaveEnabled(d kwin.Device) error
+	// ReloadConfig は KWin に kcminputrc を読み直させる。
+	ReloadConfig() error
 }
 
 // IsInternalKeyboard は d が切り替えの対象の内蔵キーボードかを返す。
@@ -42,7 +44,20 @@ func IsUsableExternal(d kwin.Device, c config.Config) bool {
 	return slices.Contains(c.External, d.Name) && d.AlphaNumeric && d.Enabled
 }
 
-// setIfDifferent は値が違うときだけ書く。トラックパッドの enabled は書くとタッチが切れる。
+// Role は d の役割を返す。どれにも当たらないデバイスは other。
+func Role(d kwin.Device, c config.Config) string {
+	switch {
+	case IsInternalKeyboard(d, c):
+		return "internal"
+	case isInternalTouchpad(d, c):
+		return "touchpad"
+	case slices.Contains(c.External, d.Name):
+		return "external"
+	}
+	return "other"
+}
+
+// setIfDifferent は値が違うときだけ書く。
 func setIfDifferent(b Backend, d kwin.Device, want bool) error {
 	if d.Enabled == want {
 		return nil
@@ -65,14 +80,15 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 
 	var errs []error
 	var saveTarget *kwin.Device
+	turnedOff := false
 	for i, d := range devices {
-		switch {
-		case IsInternalKeyboard(d, c):
-			errs = append(errs, setIfDifferent(b, d, want))
-		case isInternalTouchpad(d, c):
-			errs = append(errs, setIfDifferent(b, d, true))
-		default:
+		if d.Name != c.Internal {
 			continue
+		}
+		// トラックパッドの enabled には書かない。保存値だけはキーボードと同じグループなので、下で一緒に直す。
+		if IsInternalKeyboard(d, c) {
+			errs = append(errs, setIfDifferent(b, d, want))
+			turnedOff = turnedOff || (d.Enabled && !want)
 		}
 		if saveTarget == nil {
 			saveTarget = &devices[i]
@@ -83,6 +99,11 @@ func Reconcile(b Backend, c config.Config) (string, error) {
 	// 次のセッションが内蔵キーボード無しで (MacBook ならトラックパッドも無しで) 始まる。
 	if saveTarget != nil {
 		errs = append(errs, b.SaveEnabled(*saveTarget))
+	}
+	// KWin はメモリにも false を持つ。そのままだと、スリープ復帰で作り直されたキーボードが無効で始まり、
+	// D-Bus のオブジェクトも失っていると誰も戻せない。読み直させて、有効で始まるようにする。
+	if turnedOff {
+		errs = append(errs, b.ReloadConfig())
 	}
 
 	return summarize(b, c, external, want, missing), errors.Join(errs...)
@@ -112,7 +133,7 @@ func summarize(b Backend, c config.Config, external, want bool, missing []string
 	return line
 }
 
-// Restore は内蔵キーボードと同じ名前のデバイスをすべて有効に戻す。
+// Restore は内蔵キーボードを有効に戻す。同じ名前のトラックパッドの enabled には書かない。
 func Restore(b Backend, c config.Config) error {
 	devices, _, err := b.Devices()
 	if err != nil {
@@ -124,7 +145,9 @@ func Restore(b Backend, c config.Config) error {
 		if d.Name != c.Internal {
 			continue
 		}
-		errs = append(errs, setIfDifferent(b, d, true))
+		if IsInternalKeyboard(d, c) {
+			errs = append(errs, setIfDifferent(b, d, true))
+		}
 		if !saved {
 			errs = append(errs, b.SaveEnabled(d))
 			saved = true
@@ -135,7 +158,10 @@ func Restore(b Backend, c config.Config) error {
 
 // Watch は最初に 1 回、その後は信号のまとまりごとに 1 回、状態を合わせる。ctx が終わると内蔵キーボードを戻して
 // nil を返し、events が閉じるとエラーを返す。KWin に届かないのはログに残すだけで、KWin が戻れば信号が来る。
-func Watch(ctx context.Context, b Backend, c config.Config, events <-chan struct{}, quiet time.Duration, logger *log.Logger) error {
+func Watch(ctx context.Context, b Backend, c config.Config, events <-chan kwin.Event, quiet time.Duration, logger *log.Logger) error {
+	known := map[string]kwin.Device{}
+	rememberDevices(b, known)
+
 	apply := func() {
 		summary, err := Reconcile(b, c)
 		if summary != "" {
@@ -158,13 +184,47 @@ func Watch(ctx context.Context, b Backend, c config.Config, events <-chan struct
 				logger.Printf("warning: restore: %v", err)
 			}
 			return nil
-		case _, ok := <-events:
+		case event, ok := <-events:
 			if !ok {
 				return errors.New("session bus connection closed")
 			}
+			logger.Print(eventLine(b, c, known, event))
 			timer.Reset(quiet)
 		case <-timer.C:
 			apply()
 		}
 	}
+}
+
+func rememberDevices(b Backend, known map[string]kwin.Device) {
+	devices, _, err := b.Devices()
+	if err != nil {
+		return
+	}
+	for _, d := range devices {
+		known[d.SysName] = d
+	}
+}
+
+// eventLine は信号 1 つ分のログの行を返す。追加のときは KWin から読み直し、作られた時点の enabled を出す。
+// 削除の後は KWin から読めないので、known に覚えておいた役割と名前を出す。
+func eventLine(b Backend, c config.Config, known map[string]kwin.Device, e kwin.Event) string {
+	line := "event=" + string(e.Kind)
+	if e.Kind == kwin.KWinStarted {
+		return line
+	}
+	line += " device=" + e.SysName
+	if e.Kind == kwin.DeviceAdded {
+		delete(known, e.SysName) // sysname は使い回されるので、前のデバイスの値を出さない
+		rememberDevices(b, known)
+	}
+	d, ok := known[e.SysName]
+	if !ok {
+		return line + " unreadable"
+	}
+	line += " role=" + Role(d, c)
+	if e.Kind == kwin.DeviceAdded {
+		line += fmt.Sprintf(" enabled=%t", d.Enabled)
+	}
+	return line + fmt.Sprintf(" name=%q", d.Name)
 }
